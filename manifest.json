@@ -1,0 +1,17 @@
+{
+  "name": "Overshare",
+  "version": "0.1",
+  "manifest_version": 3,
+  "description": "Scans social media pages for personally identifiable information.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": "images/logo.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://x.com/*"],
+      "js": ["scanner/contentScript.js"]
+    }
+  ]
+}
