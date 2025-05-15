@@ -1,23 +1,22 @@
-console.log("popup.js is running");
-
-document.addEventListener("DOMContentLoaded", () => {
-    console.log("DOMContentLoaded fired");
-
+document.addEventListener("DOMContentLoaded", function () {
     const scanBtn = document.getElementById("scanBtn");
     const resultDiv = document.getElementById("result");
 
-    scanBtn.addEventListener("click", () => {
-        console.log("Button clicked");
-        if (!chrome?.storage?.local) {
-            resultDiv.innerText = "❌ chrome.storage.local is not available.";
-            return;
-        }
+    scanBtn.addEventListener("click", function () {
+        resultDiv.innerText = "🔍 Scanning...";
 
-        chrome.storage.local.get(["piiScanResults"], (result) => {
-            const results = result.piiScanResults || [];
-            resultDiv.innerHTML = results.length
-                ? results.map(r => `<div>${r}</div>`).join("")
-                : "✅ No obvious PII found.";
+        chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+            const activeTab = tabs[0];
+            chrome.tabs.sendMessage(activeTab.id, { action: "runScan" }, function (response) {
+                chrome.storage.local.get(["piiScanResults"], (result) => {
+                    const results = result.piiScanResults || [];
+                    if (results.length === 0) {
+                        resultDiv.innerText = "✅ No obvious PII found.";
+                    } else {
+                        resultDiv.innerHTML = results.map(r => `<div>${r}</div>`).join("");
+                    }
+                });
+            });
         });
     });
 });
