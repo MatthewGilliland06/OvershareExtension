@@ -1,11 +1,11 @@
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "runScan") {
-        runScan().then(sendResponse);
+        runScan(message.options || {}).then(sendResponse);
         return true;
     }
 });
 
-async function runScan() {
+async function runScan({ includeCaptions = false } = {}) {
     function waitForElement(selector, timeout = 5000) {
         return new Promise((resolve, reject) => {
             const intervalTime = 100;
@@ -28,45 +28,14 @@ async function runScan() {
     }
 
     const url = window.location.href;
-    let platform = "";
 
-    if (url.includes("x.com") || url.includes("twitter.com")) {
-        platform = "x";
-    } else if (url.includes("instagram.com")) {
-        platform = "instagram";
-    } else {
-        chrome.storage.local.set({ piiScanResults: ["❌ Unsupported platform."] });
-        return { success: false, error: "Unsupported platform." };
+    if (!url.includes("instagram.com")) {
+        chrome.storage.local.set({ piiScanResults: ["❌ This extension only supports Instagram."] });
+        return { success: false, error: "Unsupported platform" };
     }
 
     try {
-        let profileBioEl = null;
-        let profileLocationEl = null;
-
-        if (platform === "x") {
-            profileBioEl = await waitForElement('div[data-testid="UserDescription"]');
-            profileLocationEl = document.querySelector('div[data-testid="UserProfileHeader_Items"] span');
-        } else if (platform === "instagram") {
-        // Get the inner-most <span> where the bio text is rendered
-        profileBioEl = await waitForElement('header section span._ap3a span._ap3a');
-
-        if (!profileBioEl || !profileBioEl.innerText) {
-            throw new Error("Instagram bio element not found.");
-        }
-
-        console.log("Instagram bio found:", profileBioEl.innerText);
-
-
-    }
-
-
         const results = [];
-
-        if (!profileBioEl) throw new Error("Bio element not found.");
-
-        const bioText = profileBioEl.innerText;
-
-        // Basic PII patterns
         const piiPatterns = [
             {
                 regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/g,
@@ -78,26 +47,89 @@ async function runScan() {
             }
         ];
 
+        // Scan BIO
+        const profileBioEl = await waitForElement('header section span._ap3a span._ap3a');
+        const bioText = profileBioEl.innerText;
+        let rawBioHTML = profileBioEl.innerHTML;
+
+        // PII detection in bio
         piiPatterns.forEach(({ regex, label }) => {
             if (bioText.match(regex)) {
                 results.push(`${label} found in bio`);
             }
-        });
-
-        if (platform === "x" && profileLocationEl && profileLocationEl.innerText) {
-            results.push(`📍 Location listed: "${profileLocationEl.innerText}"`);
-        }
-
-        // Highlight PII in bio
-        let rawHTML = profileBioEl.innerHTML;
-
-        piiPatterns.forEach(({ regex, label }) => {
-            rawHTML = rawHTML.replace(regex, (match) => {
+            rawBioHTML = rawBioHTML.replace(regex, (match) => {
                 return `<span style="background-color: yellow; color: black; font-weight: bold;" title="Detected ${label}">${match}</span>`;
             });
         });
 
-        profileBioEl.innerHTML = rawHTML;
+        // College + Graduation year detection
+        const uniMatches = [];
+        const cleanedBio = bioText
+        .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'") // normalize quotes
+        .replace(/\u00A0/g, ' '); // replace non-breaking spaces
+
+        const uniGradRegex = /\b([A-Z]{2,4}|[A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*'?(\d{2,4})\b/g;
+
+        let match;
+        const bibleBooks = [
+        "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy",
+        "Joshua", "Judges", "Ruth", "Samuel", "Kings", "Chronicles", "Ezra", "Nehemiah",
+        "Esther", "Job", "Psalms", "Proverbs", "Ecclesiastes", "Isaiah", "Jeremiah",
+        "Lamentations", "Ezekiel", "Daniel", "Hosea", "Joel", "Amos", "Obadiah", "Jonah",
+        "Micah", "Nahum", "Habakkuk", "Zephaniah", "Haggai", "Zechariah", "Malachi",
+        "Matthew", "Mark", "Luke", "John", "Acts", "Romans", "Corinthians", "Galatians",
+        "Ephesians", "Philippians", "Colossians", "Thessalonians", "Timothy", "Titus",
+        "Philemon", "Hebrews", "James", "Peter", "Jude", "Revelation"
+        ];
+
+        while ((match = uniGradRegex.exec(cleanedBio)) !== null) {
+        const school = match[1];
+        let year = match[2];
+
+        // Skip Bible books (Actually very common issue)
+        if (bibleBooks.includes(school)) continue;
+
+        // Convert to full year
+        if (year.length === 2) {
+            const parsed = parseInt(year);
+            year = parsed > 30 ? `19${parsed}` : `20${parsed}`;
+        }
+
+        const estimatedAge = new Date().getFullYear() - parseInt(year) + 22;
+        results.push(`🎓 Possible college mention: ${school} (${year})`);
+        results.push(`🧠 Estimated age: ~${estimatedAge}`);
+        uniMatches.push(school);
+        }
+
+        // Highlight school names
+        uniMatches.forEach(school => {
+            const regex = new RegExp(`\\b${school}\\b`, "g");
+            rawBioHTML = rawBioHTML.replace(regex, (match) => {
+                return `<span style="background-color: orange; color: black; font-weight: bold;" title="Detected College">${match}</span>`;
+            });
+        });
+
+        profileBioEl.innerHTML = rawBioHTML;
+
+        // Caption scanning (optional)
+        if (includeCaptions) {
+            const captionElements = document.querySelectorAll('ul._a9zj li._a9zm');
+            captionElements.forEach((el) => {
+                const captionText = el.innerText;
+                let rawHTML = el.innerHTML;
+
+                piiPatterns.forEach(({ regex, label }) => {
+                    if (captionText.match(regex)) {
+                        results.push(`${label} found in post caption: "${captionText.substring(0, 40)}..."`);
+                        rawHTML = rawHTML.replace(regex, (match) => {
+                            return `<span style="background-color: yellow; color: black; font-weight: bold;" title="Detected ${label}">${match}</span>`;
+                        });
+                    }
+                });
+
+                el.innerHTML = rawHTML;
+            });
+        }
 
         chrome.storage.local.set({ piiScanResults: results.length ? results : ["✅ No obvious PII found."] });
 
